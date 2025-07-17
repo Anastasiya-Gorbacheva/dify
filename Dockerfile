@@ -15,9 +15,8 @@ ENV PATH="$PNPM_HOME:$PATH"
 FROM base AS packages
 
 WORKDIR /app/web
-
-COPY package.json .
-COPY pnpm-lock.yaml .
+COPY web/package.json .
+COPY web/pnpm-lock.yaml .
 
 # if you located in China, you can use taobao registry to speed up
 # RUN pnpm install --frozen-lockfile --registry https://registry.npmmirror.com/
