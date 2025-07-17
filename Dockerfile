@@ -1,10 +1,76 @@
-/*!-----------------------------------------------------------------------------
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Version: 0.46.0(21007360cad28648bdf46282a2592cb47c3a7a6f)
- * Released under the MIT license
- * https://github.com/microsoft/monaco-editor/blob/main/LICENSE.txt
- *-----------------------------------------------------------------------------*/
-define("vs/basic-languages/dockerfile/dockerfile", ["require","require"],(require)=>{
-"use strict";var moduleExports=(()=>{var a=Object.defineProperty;var l=Object.getOwnPropertyDescriptor;var r=Object.getOwnPropertyNames;var i=Object.prototype.hasOwnProperty;var p=(o,e)=>{for(var s in e)a(o,s,{get:e[s],enumerable:!0})},g=(o,e,s,t)=>{if(e&&typeof e=="object"||typeof e=="function")for(let n of r(e))!i.call(o,n)&&n!==s&&a(o,n,{get:()=>e[n],enumerable:!(t=l(e,n))||t.enumerable});return o};var c=o=>g(a({},"__esModule",{value:!0}),o);var k={};p(k,{conf:()=>u,language:()=>d});var u={brackets:[["{","}"],["[","]"],["(",")"]],autoClosingPairs:[{open:"{",close:"}"},{open:"[",close:"]"},{open:"(",close:")"},{open:'"',close:'"'},{open:"'",close:"'"}],surroundingPairs:[{open:"{",close:"}"},{open:"[",close:"]"},{open:"(",close:")"},{open:'"',close:'"'},{open:"'",close:"'"}]},d={defaultToken:"",tokenPostfix:".dockerfile",variable:/\${?[\w]+}?/,tokenizer:{root:[{include:"@whitespace"},{include:"@comment"},[/(ONBUILD)(\s+)/,["keyword",""]],[/(ENV)(\s+)([\w]+)/,["keyword","",{token:"variable",next:"@arguments"}]],[/(FROM|MAINTAINER|RUN|EXPOSE|ENV|ADD|ARG|VOLUME|LABEL|USER|WORKDIR|COPY|CMD|STOPSIGNAL|SHELL|HEALTHCHECK|ENTRYPOINT)/,{token:"keyword",next:"@arguments"}]],arguments:[{include:"@whitespace"},{include:"@strings"},[/(@variable)/,{cases:{"@eos":{token:"variable",next:"@popall"},"@default":"variable"}}],[/\\/,{cases:{"@eos":"","@default":""}}],[/./,{cases:{"@eos":{token:"",next:"@popall"},"@default":""}}]],whitespace:[[/\s+/,{cases:{"@eos":{token:"",next:"@popall"},"@default":""}}]],comment:[[/(^#.*$)/,"comment","@popall"]],strings:[[/\\'$/,"","@popall"],[/\\'/,""],[/'$/,"string","@popall"],[/'/,"string","@stringBody"],[/"$/,"string","@popall"],[/"/,"string","@dblStringBody"]],stringBody:[[/[^\\\$']/,{cases:{"@eos":{token:"string",next:"@popall"},"@default":"string"}}],[/\\./,"string.escape"],[/'$/,"string","@popall"],[/'/,"string","@pop"],[/(@variable)/,"variable"],[/\\$/,"string"],[/$/,"string","@popall"]],dblStringBody:[[/[^\\\$"]/,{cases:{"@eos":{token:"string",next:"@popall"},"@default":"string"}}],[/\\./,"string.escape"],[/"$/,"string","@popall"],[/"/,"string","@pop"],[/(@variable)/,"variable"],[/\\$/,"string"],[/$/,"string","@popall"]]}};return c(k);})();
-return moduleExports;
-});
+# base image
+FROM node:22-alpine3.21 AS base
+LABEL maintainer="takatost@gmail.com"
+
+# if you located in China, you can use aliyun mirror to speed up
+# RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+RUN apk add --no-cache tzdata
+RUN npm install -g pnpm@10.11.1
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+
+
+# install packages
+FROM base AS packages
+
+WORKDIR /app/web
+
+COPY package.json .
+COPY pnpm-lock.yaml .
+
+# if you located in China, you can use taobao registry to speed up
+# RUN pnpm install --frozen-lockfile --registry https://registry.npmmirror.com/
+
+RUN pnpm install --frozen-lockfile
+
+# build resources
+FROM base AS builder
+WORKDIR /app/web
+COPY --from=packages /app/web/ .
+COPY . .
+
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+RUN pnpm build
+
+
+# production stage
+FROM base AS production
+
+ENV NODE_ENV=production
+ENV EDITION=SELF_HOSTED
+ENV DEPLOY_ENV=PRODUCTION
+ENV CONSOLE_API_URL=http://127.0.0.1:5001
+ENV APP_API_URL=http://127.0.0.1:5001
+ENV MARKETPLACE_API_URL=https://marketplace.dify.ai
+ENV MARKETPLACE_URL=https://marketplace.dify.ai
+ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PM2_INSTANCES=2
+
+# set timezone
+ENV TZ=UTC
+RUN ln -s /usr/share/zoneinfo/${TZ} /etc/localtime \
+    && echo ${TZ} > /etc/timezone
+
+
+WORKDIR /app/web
+COPY --from=builder /app/web/public ./public
+COPY --from=builder /app/web/.next/standalone ./
+COPY --from=builder /app/web/.next/static ./.next/static
+
+COPY docker/entrypoint.sh ./entrypoint.sh
+
+
+# global runtime packages
+RUN pnpm add -g pm2 \
+    && mkdir /.pm2 \
+    && chown -R 1001:0 /.pm2 /app/web \
+    && chmod -R g=u /.pm2 /app/web
+
+ARG COMMIT_SHA
+ENV COMMIT_SHA=${COMMIT_SHA}
+
+USER 1001
+EXPOSE 3000
+ENTRYPOINT ["/bin/sh", "./entrypoint.sh"]
